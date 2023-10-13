@@ -17,12 +17,6 @@ typedef struct {
     char *executable;
 } Process;
 
-// Define a circular queue to store processes
-Process ready_queue[MAX_QUEUE_SIZE];
-int front = 0;
-int rear = -1;
-int itemCount = 0;
-
 // Attach to the shared memory segment (shm_id is the shared memory ID)
 void* shared_memory = shmat(shm_id, NULL, 0);
 
@@ -36,7 +30,13 @@ struct {
     //int signal_stop;  // Signal to stop a process                                                                                 //  dbt what will be the data type 
 } *shared_data = (struct shared_data*)shared_memory;
 
+int status_pipe[2]; // Pipe for receiving process status from the shell
 
+// Define a circular queue to store processes
+Process ready_queue[MAX_QUEUE_SIZE];
+int front = 0;
+int rear = -1;
+int itemCount = 0;
 
 // Function to add a process to the ready queue
 void enqueue(Process process) {
@@ -57,6 +57,57 @@ Process dequeue() {
     return data;
 }
 
+
+// Define a circular queue to store running processes
+Process running_queue[MAX_QUEUE_SIZE];
+int running_front = 0;
+int running_rear = -1;
+int running_itemCount = 0;
+
+// Function to add a process to the running queue
+void enqueueRunning(Process process) {
+    if (running_itemCount < MAX_QUEUE_SIZE) {
+        if (running_rear == MAX_QUEUE_SIZE - 1)
+            running_rear = -1;
+        running_queue[++running_rear] = process;
+        running_itemCount++;
+    }
+}
+
+// Function to remove and return a process from the front of the running queue
+Process dequeueRunning() {
+    Process data = running_queue[running_front++];
+    if (running_front == MAX_QUEUE_SIZE)
+        running_front = 0;
+    running_itemCount--;
+    return data;
+}
+
+// Define a circular queue to store terminated processes
+Process terminated_queue[MAX_QUEUE_SIZE];
+int terminated_front = 0;
+int terminated_rear = -1;
+int terminated_itemCount = 0;
+
+// Function to add a process to the terminated queue
+void enqueueTerminated(Process process) {
+    if (terminated_itemCount < MAX_QUEUE_SIZE) {
+        if (terminated_rear == MAX_QUEUE_SIZE - 1)
+            terminated_rear = -1;
+        terminated_queue[++terminated_rear] = process;
+        terminated_itemCount++;
+    }
+}
+
+// Function to remove and return a process from the front of the terminated queue
+Process dequeueTerminated() {
+    Process data = terminated_queue[terminated_front++];
+    if (terminated_front == MAX_QUEUE_SIZE)
+        terminated_front = 0;
+    terminated_itemCount--;
+    return data;
+}
+
 void signal_start_execution(int signo) {
     if (signo == SIGSUR2) {
         while(1){
@@ -67,16 +118,26 @@ void signal_start_execution(int signo) {
                     Process process = dequeue();
                     process.state = 1; // Set the state to RUNNING
                     // Notify SimpleShell to start the process
+                    // Add the running process to the running queue
+                    enqueueRunning(process);
                     kill(process.pid, SIGUSR2);
                 }
                 // Simulate the time slice (TSLICE) by sleeping
                 sleep(TSLICE);
                 // Notify SimpleShell to stop the processes
                 for (int i = 0; i < num_to_run; i++) {
-                    Process process = dequeue();
+                    Process process = dequeueRunning();
                     process.state = 0; // Set the state to READY
                     // Notify SimpleShell to stop the process
-                    kill(process.pid, SIGUSR2);
+                    int status;
+                    read(status_pipe[0], &status, sizeof(status));
+                    if (status != 0){
+                        kill(process.pid, SIGUSR2);
+                        enqueue(process);
+                    }
+                    else if (status == 0){
+                        enqueueTerminated(process);
+                    }
                 }
             }
         }    

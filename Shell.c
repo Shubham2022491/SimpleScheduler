@@ -5,6 +5,8 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 
+
+
 typedef struct {
     int pid;
     int burst_time; // Time needed to complete the process
@@ -20,6 +22,8 @@ int front = 0;
 int rear = -1;
 int itemCount = 0;
 
+
+
 // Attach to the shared memory segment (shm_id is the shared memory ID)
 void* shared_memory = shmat(shm_id, NULL, 0);
 
@@ -32,6 +36,9 @@ struct {
     //int signal_start; // Signal to start a process
     //int signal_stop;  // Signal to stop a process                                                                                 //  dbt what will be the data type 
 } *shared_data = (struct shared_data*)shared_memory;
+
+
+int status_pipe[2]; // Pipe for sending process status to the scheduler
 
 
 // Function to add a process to the ready queue
@@ -70,12 +77,44 @@ void add_to_ready_queue(Process newProcess ,int NCPU ,int TSLICE) {
 
 void start_execution(int signo) {
     if (signo == SIGUSR2) {
-        // Execute the user program here
-        execl(executable, executable, NULL);
-        perror("execl");
-        exit(EXIT_FAILURE);
+        // Create a pipe for communication
+        int pipefd[2];
+        if (pipe(pipefd) == -1) {
+            perror("pipe");
+            exit(EXIT_FAILURE);
+        }
+
+        pid_t child_pid = fork();
+
+        if (child_pid < 0) {
+            perror("fork");
+            exit(EXIT_FAILURE);
+        } else if (child_pid == 0) {
+            // This code runs in the child process
+            close(pipefd[0]);  // Close the read end of the pipe
+
+            // Execute the user program here
+            execl(executable, executable, NULL);
+            perror("execl");
+            exit(EXIT_FAILURE);
+        } else {
+            // This code runs in the parent process
+            close(pipefd[1]);  // Close the write end of the pipe
+
+            int status;
+            // Wait for the child process to complete and get its status
+            waitpid(child_pid, &status, 0);
+
+            // You can write the status to the pipe so that the parent can read it
+            
+            close(status_pipe[1]);
+
+                // Write the status to the pipe
+            write(status_pipe[0], &status, sizeof(status));
+        }
     }
 }
+
 
 int custom_signal = SIGUSR2;
 
